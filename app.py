@@ -25,6 +25,59 @@ def init_db():
         CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY, receivable_id INTEGER REFERENCES receivables(id), fecha TEXT NOT NULL, monto INTEGER NOT NULL CHECK(monto>0));''')
         if not c.execute('SELECT id FROM users LIMIT 1').fetchone():
             c.execute('INSERT INTO users(username,password_hash) VALUES(?,?)',(os.getenv('ADMIN_USER','admin'),generate_password_hash(os.getenv('ADMIN_PASSWORD','Moto2026!'))))
+        # Datos exclusivamente ficticios, inicializados una sola vez por base de datos.
+        # Nunca modifica los registros existentes ni restaura datos borrados por el usuario.
+        c.execute("CREATE TABLE IF NOT EXISTS demo_seed_meta (id INTEGER PRIMARY KEY CHECK(id=1), seeded_at TEXT NOT NULL)")
+        has_seed = c.execute('SELECT 1 FROM demo_seed_meta WHERE id=1').fetchone()
+        if not has_seed:
+            tables = ('products', 'customers', 'sales', 'sale_items', 'receivables', 'payments')
+            is_empty = all(c.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() is None for table in tables)
+            if is_empty:
+                catalog = [
+                    ('LL-001', 'Llanta Michelin (DEMO)', 80000, 5),
+                    ('FI-002', 'Filtro de aceite (DEMO)', 25000, 12),
+                    ('BU-003', 'Bujía para moto (DEMO)', 18000, 20),
+                ]
+                product_ids = {}
+                for code, name, price, stock in catalog:
+                    product_ids[code] = c.execute(
+                        'INSERT INTO products(codigo,nombre,precio,stock) VALUES (?,?,?,?)',
+                        (code, name, price, stock)
+                    ).lastrowid
+                client_ids = []
+                for document, name, phone, email in [
+                    ('DEMO-001', 'Juan Pérez (DEMO)', '3000000001', 'juan.demo@example.com'),
+                    ('DEMO-002', 'María Gómez (DEMO)', '3000000002', 'maria.demo@example.com'),
+                ]:
+                    client_ids.append(c.execute(
+                        'INSERT INTO customers(documento,nombre,telefono,email) VALUES (?,?,?,?)',
+                        (document, name, phone, email)
+                    ).lastrowid)
+                stamp = datetime.now().isoformat(timespec='seconds')
+                # Venta a crédito: 2 llantas por 160.000; abono de 60.000; saldo 100.000.
+                credit_sale = c.execute(
+                    'INSERT INTO sales(fecha,tipo,customer_id,total) VALUES (?,?,?,?)',
+                    (stamp, 'CREDITO', client_ids[0], 160000)
+                ).lastrowid
+                c.execute('INSERT INTO sale_items(sale_id,product_id,cantidad,precio,subtotal) VALUES (?,?,?,?,?)',
+                          (credit_sale, product_ids['LL-001'], 2, 80000, 160000))
+                c.execute('UPDATE products SET stock=stock-2 WHERE id=?', (product_ids['LL-001'],))
+                account_id = c.execute(
+                    'INSERT INTO receivables(sale_id,customer_id,saldo_inicial,saldo_actual) VALUES (?,?,?,?)',
+                    (credit_sale, client_ids[0], 160000, 100000)
+                ).lastrowid
+                c.execute('INSERT INTO payments(receivable_id,fecha,monto) VALUES (?,?,?)',
+                          (account_id, stamp, 60000))
+                # Venta de contado: 1 filtro por 25.000.
+                cash_sale = c.execute(
+                    'INSERT INTO sales(fecha,tipo,customer_id,total) VALUES (?,?,?,?)',
+                    (stamp, 'CONTADO', client_ids[1], 25000)
+                ).lastrowid
+                c.execute('INSERT INTO sale_items(sale_id,product_id,cantidad,precio,subtotal) VALUES (?,?,?,?,?)',
+                          (cash_sale, product_ids['FI-002'], 1, 25000, 25000))
+                c.execute('UPDATE products SET stock=stock-1 WHERE id=?', (product_ids['FI-002'],))
+            c.execute('INSERT INTO demo_seed_meta(id,seeded_at) VALUES (1,?)',
+                      (datetime.now().isoformat(timespec='seconds'),))
 init_db()
 
 def login_required(fn):
